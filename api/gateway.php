@@ -7,6 +7,61 @@ require_once __DIR__ . '/../app/Core/FeminiApiClient.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
+function extract_text_content($payload)
+{
+    if (!is_array($payload)) {
+        return '';
+    }
+
+    $candidates = [
+        $payload['content'] ?? null,
+        $payload['message'] ?? null,
+        $payload['text'] ?? null,
+        $payload['result']['content'] ?? null,
+        $payload['result']['message'] ?? null,
+        $payload['result']['text'] ?? null,
+        $payload['data']['content'] ?? null,
+        $payload['data']['message'] ?? null,
+        $payload['data']['text'] ?? null,
+        $payload['output_text'] ?? null,
+    ];
+
+    foreach ($candidates as $item) {
+        if (is_string($item) && trim($item) !== '') {
+            return trim($item);
+        }
+    }
+
+    return '';
+}
+
+function extract_image_content($payload)
+{
+    if (!is_array($payload)) {
+        return '';
+    }
+
+    $candidates = [
+        $payload['image_url'] ?? null,
+        $payload['url'] ?? null,
+        $payload['image'] ?? null,
+        $payload['result']['image_url'] ?? null,
+        $payload['result']['url'] ?? null,
+        $payload['result']['image'] ?? null,
+        $payload['data']['image_url'] ?? null,
+        $payload['data']['url'] ?? null,
+        $payload['data']['image'] ?? null,
+    ];
+
+    foreach ($candidates as $item) {
+        if (is_string($item) && trim($item) !== '') {
+            return trim($item);
+        }
+    }
+
+    return '';
+}
+
 if (!is_logged_in()) {
     http_response_code(401);
     echo json_encode(['ok' => false, 'message' => 'Oturum bulunamadı.']);
@@ -71,25 +126,31 @@ if (!is_array($submit) || (int)($submit['http_code'] ?? 500) >= 400) {
     exit;
 }
 
-$taskId = $submit['task_id'] ?? $submit['id'] ?? null;
+$taskId = $submit['task_id'] ?? $submit['id'] ?? $submit['data']['task_id'] ?? null;
 $resultData = $submit;
 
 if (!empty($taskId)) {
-    $maxPoll = 25;
+    $maxPoll = 30;
 
     for ($i = 0; $i < $maxPoll; $i++) {
         $resultResp = $client->getTaskResult($taskId);
         $httpCode = (int)($resultResp['http_code'] ?? 0);
+        $statusText = strtolower((string)($resultResp['status'] ?? $resultResp['result']['status'] ?? $resultResp['data']['status'] ?? ''));
 
-        $hasText = !empty($resultResp['content']) || !empty($resultResp['message']) || !empty($resultResp['result']['content']) || !empty($resultResp['result']['message']);
-        $hasImage = !empty($resultResp['image_url']) || !empty($resultResp['url']) || !empty($resultResp['result']['image_url']) || !empty($resultResp['result']['url']);
+        $text = extract_text_content($resultResp);
+        $image = extract_image_content($resultResp);
 
-        if (($isImage && $hasImage) || (!$isImage && $hasText)) {
+        if (($isImage && $image !== '') || (!$isImage && $text !== '')) {
             $resultData = $resultResp;
             break;
         }
 
-        if ($httpCode >= 400 && $httpCode !== 404 && $httpCode !== 425 && $httpCode !== 202) {
+        if (in_array($statusText, ['completed', 'done', 'success', 'succeeded'], true)) {
+            $resultData = $resultResp;
+            break;
+        }
+
+        if ($httpCode >= 400 && !in_array($httpCode, [202, 404, 425], true)) {
             http_response_code(502);
             echo json_encode([
                 'ok' => false,
@@ -103,28 +164,19 @@ if (!empty($taskId)) {
     }
 }
 
-$assistantContent = '';
-if ($isImage) {
-    $assistantContent = (string)(
-        $resultData['image_url']
-        ?? $resultData['url']
-        ?? $resultData['result']['image_url']
-        ?? $resultData['result']['url']
-        ?? ''
-    );
-} else {
-    $assistantContent = (string)(
-        $resultData['content']
-        ?? $resultData['message']
-        ?? $resultData['result']['content']
-        ?? $resultData['result']['message']
-        ?? ''
-    );
+$assistantContent = $isImage ? extract_image_content($resultData) : extract_text_content($resultData);
+
+if ($assistantContent === '' && $isImage === false && !empty($resultData['result']) && is_array($resultData['result'])) {
+    $assistantContent = trim((string)json_encode($resultData['result'], JSON_UNESCAPED_UNICODE));
 }
 
 if ($assistantContent === '') {
     http_response_code(504);
-    echo json_encode(['ok' => false, 'message' => 'Görev henüz tamamlanmadı veya boş yanıt döndü.']);
+    echo json_encode([
+        'ok' => false,
+        'message' => 'API yanıtı alındı ancak içerik alanı bulunamadı.',
+        'detail' => $resultData,
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

@@ -12,6 +12,9 @@ $chatController = new ChatController();
 $adminController = new AdminController();
 
 switch ($route) {
+    case 'landing':
+        include __DIR__ . '/views/landing.php';
+        break;
     case 'login':
         $authController->showLogin();
         break;
@@ -58,7 +61,7 @@ switch ($route) {
         break;
     default:
         if (!is_logged_in()) {
-            header('Location: /?route=login');
+            header('Location: /?route=landing');
             exit;
         }
         $chatController->index();
