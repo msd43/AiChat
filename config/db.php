@@ -1,7 +1,8 @@
 <?php
 class Database
 {
-    private static ?PDO $pdo = null;
+    /** @var PDO|null */
+    private static $pdo = null;
 
     public static function getConnection(): PDO
     {
