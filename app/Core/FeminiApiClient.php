@@ -8,7 +8,7 @@ class FeminiApiClient
     public function __construct($baseUrl, $apiKey)
     {
         $this->baseUrl = rtrim((string)$baseUrl, '/');
-        $this->apiKey = (string)$apiKey;
+        $this->apiKey = trim((string)$apiKey);
     }
 
     /**
@@ -57,6 +57,14 @@ class FeminiApiClient
     private function sendCurlRequest($url, $method = 'GET', $data = null)
     {
         $ch = curl_init($url);
+
+        if ($this->apiKey === '') {
+            return [
+                'ok' => false,
+                'http_code' => 0,
+                'message' => 'API key boş olduğu için istek gönderilmedi.',
+            ];
+        }
 
         $headers = [
             'X-API-Key: ' . $this->apiKey,

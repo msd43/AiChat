@@ -43,12 +43,21 @@ if (!$chat) {
     exit;
 }
 
-$apiBaseUrl = (string)Setting::get('api_base_url', '');
-$apiKey = (string)Setting::get('api_key', '');
+$apiBaseUrl = trim((string)Setting::get('api_base_url', ''));
+$config = app_config();
+$defaultApiKey = trim((string)($config['default_api_key'] ?? ''));
+$apiKeyFromDb = trim((string)Setting::get('api_key', ''));
+$apiKey = $apiKeyFromDb !== '' ? $apiKeyFromDb : $defaultApiKey;
 
 if ($apiBaseUrl === '') {
     http_response_code(500);
     echo json_encode(['ok' => false, 'message' => 'API Base URL ayarlı değil.']);
+    exit;
+}
+
+if ($apiKey === '') {
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'message' => 'API Key ayarlı değil. Admin panelinden API Key girin.']);
     exit;
 }
 
