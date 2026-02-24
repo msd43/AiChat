@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS settings (
 ) ENGINE=InnoDB;
 
 INSERT INTO settings (setting_key, setting_value) VALUES
-('api_base_url', 'https://github.com/insafm/femini referanslı kendi API adresim'),
+('api_base_url', 'http://111.235.150.240:8000'),
 ('api_key', ''),
 ('system_prompt', 'Sen MSD adında akıllı bir asistansın...')
 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);

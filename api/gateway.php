@@ -3,6 +3,7 @@ require_once __DIR__ . '/../config/bootstrap.php';
 require_once __DIR__ . '/../models/Setting.php';
 require_once __DIR__ . '/../models/Chat.php';
 require_once __DIR__ . '/../models/Message.php';
+require_once __DIR__ . '/../app/Core/FeminiApiClient.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -12,7 +13,10 @@ if (!is_logged_in()) {
     exit;
 }
 
-$payload = json_decode(file_get_contents('php://input'), true) ?? [];
+$payload = json_decode(file_get_contents('php://input'), true);
+if (!is_array($payload)) {
+    $payload = [];
+}
 
 if (!verify_csrf($payload['csrf_token'] ?? null)) {
     http_response_code(419);
@@ -22,7 +26,8 @@ if (!verify_csrf($payload['csrf_token'] ?? null)) {
 
 $chatId = (int)($payload['chat_id'] ?? 0);
 $prompt = trim((string)($payload['prompt'] ?? ''));
-$mode = ($payload['mode'] ?? 'text') === 'image' ? 'image' : 'text';
+$mode = (($payload['mode'] ?? 'text') === 'image') ? 'image' : 'text';
+$isImage = ($mode === 'image');
 
 if ($chatId <= 0 || $prompt === '') {
     http_response_code(422);
@@ -38,70 +43,100 @@ if (!$chat) {
     exit;
 }
 
-$apiBaseUrl = Setting::get('api_base_url', '');
-$apiKey = Setting::get('api_key', '');
-$systemPrompt = Setting::get('system_prompt', 'Sen MSD adında akıllı bir asistansın...');
+$apiBaseUrl = (string)Setting::get('api_base_url', '');
+$apiKey = (string)Setting::get('api_key', '');
 
-$history = Message::listByChat($chatId);
-$historyPayload = array_map(static function ($msg) {
-    return [
-        'role' => $msg['role'],
-        'content' => $msg['content'],
-        'type' => $msg['type'],
-    ];
-}, $history);
-
-$endpoint = $mode === 'image' ? '/image' : '/chat';
-$url = rtrim($apiBaseUrl, '/') . $endpoint;
-
-$requestBody = [
-    'prompt' => $prompt,
-    'system_prompt' => $systemPrompt,
-    'history' => $historyPayload,
-    'mode' => $mode,
-];
+if ($apiBaseUrl === '') {
+    http_response_code(500);
+    echo json_encode(['ok' => false, 'message' => 'API Base URL ayarlı değil.']);
+    exit;
+}
 
 Message::create($chatId, 'user', $prompt, $mode);
 Chat::touch($chatId);
 
-$ch = curl_init($url);
-curl_setopt_array($ch, [
-    CURLOPT_POST => true,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT => 60,
-    CURLOPT_HTTPHEADER => [
-        'Content-Type: application/json',
-        'X-API-Key: ' . $apiKey,
-    ],
-    CURLOPT_POSTFIELDS => json_encode($requestBody, JSON_UNESCAPED_UNICODE),
-]);
+$client = new FeminiApiClient($apiBaseUrl, $apiKey);
+$submit = $client->submitRequest($prompt, $chatId, $isImage);
 
-$rawResponse = curl_exec($ch);
-$curlError = curl_error($ch);
-$statusCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-if ($rawResponse === false || $curlError) {
+if (!is_array($submit) || (int)($submit['http_code'] ?? 500) >= 400) {
     http_response_code(502);
-    echo json_encode(['ok' => false, 'message' => 'Dış API bağlantı hatası: ' . $curlError]);
+    echo json_encode([
+        'ok' => false,
+        'message' => 'Submit isteği başarısız.',
+        'detail' => $submit,
+    ], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-$responseData = json_decode($rawResponse, true);
-if (!is_array($responseData) || $statusCode >= 400) {
-    http_response_code(502);
-    echo json_encode(['ok' => false, 'message' => 'Dış API geçersiz bir yanıt döndürdü.', 'raw' => $rawResponse]);
-    exit;
+$taskId = $submit['task_id'] ?? $submit['id'] ?? null;
+$resultData = $submit;
+
+if (!empty($taskId)) {
+    $maxPoll = 20;
+    $done = false;
+
+    for ($i = 0; $i < $maxPoll; $i++) {
+        $statusResp = $client->getTaskStatus($taskId);
+        $statusText = strtolower((string)($statusResp['status'] ?? ''));
+
+        if (in_array($statusText, ['completed', 'done', 'success', 'succeeded'], true)) {
+            $done = true;
+            break;
+        }
+
+        if (in_array($statusText, ['failed', 'error'], true)) {
+            http_response_code(502);
+            echo json_encode([
+                'ok' => false,
+                'message' => 'Görev başarısız.',
+                'detail' => $statusResp,
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        usleep(500000);
+    }
+
+    if (!$done) {
+        http_response_code(504);
+        echo json_encode(['ok' => false, 'message' => 'Görev zaman aşımına uğradı.']);
+        exit;
+    }
+
+    $resultData = $client->getTaskResult($taskId);
 }
 
-$assistantContent = (string)($responseData['content'] ?? $responseData['message'] ?? 'Boş yanıt alındı.');
-$assistantType = $mode === 'image' ? 'image' : 'text';
+$assistantContent = '';
+if ($isImage) {
+    $assistantContent = (string)(
+        $resultData['image_url']
+        ?? $resultData['url']
+        ?? $resultData['result']['image_url']
+        ?? $resultData['result']['url']
+        ?? ''
+    );
+} else {
+    $assistantContent = (string)(
+        $resultData['content']
+        ?? $resultData['message']
+        ?? $resultData['result']['content']
+        ?? $resultData['result']['message']
+        ?? ''
+    );
+}
+
+if ($assistantContent === '') {
+    $assistantContent = 'Yanıt boş döndü.';
+}
+
+$assistantType = $isImage ? 'image' : 'text';
 Message::create($chatId, 'assistant', $assistantContent, $assistantType);
 Chat::touch($chatId);
 
 echo json_encode([
     'ok' => true,
     'message' => 'Yanıt alındı.',
+    'task_id' => $taskId,
     'assistant' => [
         'role' => 'assistant',
         'content' => $assistantContent,
