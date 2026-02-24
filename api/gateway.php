@@ -55,17 +55,11 @@ if ($apiBaseUrl === '') {
     exit;
 }
 
-if ($apiKey === '') {
-    http_response_code(500);
-    echo json_encode(['ok' => false, 'message' => 'API Key ayarlı değil. Admin panelinden API Key girin.']);
-    exit;
-}
-
 Message::create($chatId, 'user', $prompt, $mode);
 Chat::touch($chatId);
 
 $client = new FeminiApiClient($apiBaseUrl, $apiKey);
-$submit = $client->submitRequest($prompt, $chatId, $isImage);
+$submit = $client->submitRequest($prompt, $isImage);
 
 if (!is_array($submit) || (int)($submit['http_code'] ?? 500) >= 400) {
     http_response_code(502);
@@ -81,38 +75,32 @@ $taskId = $submit['task_id'] ?? $submit['id'] ?? null;
 $resultData = $submit;
 
 if (!empty($taskId)) {
-    $maxPoll = 20;
-    $done = false;
+    $maxPoll = 25;
 
     for ($i = 0; $i < $maxPoll; $i++) {
-        $statusResp = $client->getTaskStatus($taskId);
-        $statusText = strtolower((string)($statusResp['status'] ?? ''));
+        $resultResp = $client->getTaskResult($taskId);
+        $httpCode = (int)($resultResp['http_code'] ?? 0);
 
-        if (in_array($statusText, ['completed', 'done', 'success', 'succeeded'], true)) {
-            $done = true;
+        $hasText = !empty($resultResp['content']) || !empty($resultResp['message']) || !empty($resultResp['result']['content']) || !empty($resultResp['result']['message']);
+        $hasImage = !empty($resultResp['image_url']) || !empty($resultResp['url']) || !empty($resultResp['result']['image_url']) || !empty($resultResp['result']['url']);
+
+        if (($isImage && $hasImage) || (!$isImage && $hasText)) {
+            $resultData = $resultResp;
             break;
         }
 
-        if (in_array($statusText, ['failed', 'error'], true)) {
+        if ($httpCode >= 400 && $httpCode !== 404 && $httpCode !== 425 && $httpCode !== 202) {
             http_response_code(502);
             echo json_encode([
                 'ok' => false,
-                'message' => 'Görev başarısız.',
-                'detail' => $statusResp,
+                'message' => 'Result isteği başarısız.',
+                'detail' => $resultResp,
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
         usleep(500000);
     }
-
-    if (!$done) {
-        http_response_code(504);
-        echo json_encode(['ok' => false, 'message' => 'Görev zaman aşımına uğradı.']);
-        exit;
-    }
-
-    $resultData = $client->getTaskResult($taskId);
 }
 
 $assistantContent = '';
@@ -135,7 +123,9 @@ if ($isImage) {
 }
 
 if ($assistantContent === '') {
-    $assistantContent = 'Yanıt boş döndü.';
+    http_response_code(504);
+    echo json_encode(['ok' => false, 'message' => 'Görev henüz tamamlanmadı veya boş yanıt döndü.']);
+    exit;
 }
 
 $assistantType = $isImage ? 'image' : 'text';

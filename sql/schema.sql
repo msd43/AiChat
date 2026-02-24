@@ -36,6 +36,6 @@ CREATE TABLE IF NOT EXISTS settings (
 
 INSERT INTO settings (setting_key, setting_value) VALUES
 ('api_base_url', 'http://111.235.150.240:8000'),
-('api_key', 'msd_cok_gizli_anahtar_123'),
+('api_key', ''),
 ('system_prompt', 'Sen MSD adında akıllı bir asistansın...')
 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);

@@ -11,5 +11,5 @@ return [
         'charset' => 'utf8mb4',
     ],
     'session_name' => 'msd_session',
-    'default_api_key' => 'msd_cok_gizli_anahtar_123',
+    'default_api_key' => '',
 ];

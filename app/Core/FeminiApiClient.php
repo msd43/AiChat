@@ -5,7 +5,7 @@ class FeminiApiClient
     private $baseUrl;
     private $apiKey;
 
-    public function __construct($baseUrl, $apiKey)
+    public function __construct($baseUrl, $apiKey = '')
     {
         $this->baseUrl = rtrim((string)$baseUrl, '/');
         $this->apiKey = trim((string)$apiKey);
@@ -13,8 +13,9 @@ class FeminiApiClient
 
     /**
      * API'ye yeni bir istek gönderir (Submit)
+     * Not: 422 hatasını önlemek için payload sadece beklenen alanlardan oluşur.
      */
-    public function submitRequest($prompt, $chatId = null, $isImage = false)
+    public function submitRequest($prompt, $isImage = false)
     {
         $endpoint = $this->baseUrl . '/api/v1/submit';
 
@@ -22,24 +23,9 @@ class FeminiApiClient
             'prompt' => (string)$prompt,
             'is_image' => (bool)$isImage,
             'force_text' => !$isImage,
-            'download' => (bool)$isImage,
-            'return_image_data' => (bool)$isImage,
         ];
 
-        if (!empty($chatId)) {
-            $data['chat_id'] = $chatId;
-        }
-
         return $this->sendCurlRequest($endpoint, 'POST', $data);
-    }
-
-    /**
-     * Gönderilen isteğin anlık durumunu kontrol eder (Status)
-     */
-    public function getTaskStatus($taskId)
-    {
-        $endpoint = $this->baseUrl . '/api/v1/status/' . urlencode((string)$taskId);
-        return $this->sendCurlRequest($endpoint, 'GET');
     }
 
     /**
@@ -51,26 +37,19 @@ class FeminiApiClient
         return $this->sendCurlRequest($endpoint, 'GET');
     }
 
-    /**
-     * Merkezi cURL işleyici fonksiyonu
-     */
     private function sendCurlRequest($url, $method = 'GET', $data = null)
     {
         $ch = curl_init($url);
 
-        if ($this->apiKey === '') {
-            return [
-                'ok' => false,
-                'http_code' => 0,
-                'message' => 'API key boş olduğu için istek gönderilmedi.',
-            ];
-        }
-
         $headers = [
-            'X-API-Key: ' . $this->apiKey,
             'Content-Type: application/json',
             'Accept: application/json',
         ];
+
+        // API key zorunlu değil; varsa eklenir.
+        if ($this->apiKey !== '') {
+            $headers[] = 'X-API-Key: ' . $this->apiKey;
+        }
 
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
@@ -108,7 +87,7 @@ class FeminiApiClient
 
         $decoded['http_code'] = $httpCode;
 
-        if ($httpCode !== 200) {
+        if ($httpCode >= 400) {
             error_log('MSD_API_ERROR: URL: ' . $url . ' | Code: ' . $httpCode . ' | Error: ' . $error . ' | Response: ' . $response);
         }
 
